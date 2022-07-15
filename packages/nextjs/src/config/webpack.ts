@@ -1,6 +1,6 @@
 /* eslint-disable max-lines */
 import { getSentryRelease } from '@sentry/node';
-import { dropUndefinedKeys, logger } from '@sentry/utils';
+import { dropUndefinedKeys, escapeStringForRegex, logger } from '@sentry/utils';
 import { default as SentryWebpackPlugin } from '@sentry/webpack-plugin';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -50,6 +50,38 @@ export function constructWebpackConfigFunction(
       newConfig = userNextConfig.webpack(newConfig, buildContext);
     }
 
+    const { isServer, dir: projectDir } = buildContext;
+
+    const pagesDirRegex = new RegExp(`${escapeStringForRegex(projectDir)}(/src)?/pages(/.*)`);
+
+    if (isServer) {
+      newConfig.module = {
+        ...newConfig.module,
+        rules: [
+          ...(newConfig.module?.rules || []),
+          {
+            test: pagesDirRegex,
+            // test: new RegExp(`${escapeStringForRegex(projectDir)}(\/src)?\/pages(\/.*)`),
+            use: [
+              // {
+              //   loader: path.resolve(__dirname, 'loader.js'),
+              //   options: {
+              //     pagesDirRegex,
+              //     distDir: userNextConfig.distDir,
+              //   },
+              // },
+              {
+                loader: 'babel-loader',
+                options: {
+                  plugins: ['@babel/plugin-transform-modules-commonjs'],
+                },
+              },
+            ],
+          },
+        ],
+      };
+    }
+
     // Tell webpack to inject user config files (containing the two `Sentry.init()` calls) into the appropriate output
     // bundles. Store a separate reference to the original `entry` value to avoid an infinite loop. (If we don't do
     // this, we'll have a statement of the form `x.y = () => f(x.y)`, where one of the things `f` does is call `x.y`.
@@ -70,7 +102,7 @@ export function constructWebpackConfigFunction(
       // with the `--ignore-scripts` option, this will be blocked and the missing binary will cause an error when users
       // try to build their apps.)
       ensureCLIBinaryExists() &&
-      (buildContext.isServer
+      (isServer
         ? !userNextConfig.sentry?.disableServerWebpackPlugin
         : !userNextConfig.sentry?.disableClientWebpackPlugin);
 
