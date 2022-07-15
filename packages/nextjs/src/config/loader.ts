@@ -25,6 +25,11 @@ function addSentryToSource(this: LoaderThis, userCode: string): string {
   const route = loaderThis.resourcePath.match(pagesDirRegex)?.[2];
   debugger;
 
+  // TODO find a better way to guarantee that `route` exists
+  if (!route) {
+    throw new Error('fixme');
+  }
+
   const templatePath = path.resolve(__dirname, 'injectionTemplate.js');
   let templateCode = fs.readFileSync(templatePath).toString();
 
