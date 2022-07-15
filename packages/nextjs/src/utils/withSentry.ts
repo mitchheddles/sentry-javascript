@@ -1,8 +1,10 @@
+/* eslint-disable max-lines */
 import { addRequestDataToEvent, captureException, flush, getCurrentHub, startTransaction } from '@sentry/node';
 import { extractTraceparentData, hasTracingEnabled } from '@sentry/tracing';
 import { Transaction } from '@sentry/types';
 import {
   addExceptionMechanism,
+  getGlobalObject,
   isString,
   logger,
   objectify,
@@ -10,7 +12,17 @@ import {
   stripUrlQueryAndFragment,
 } from '@sentry/utils';
 import * as domain from 'domain';
-import { NextApiHandler, NextApiRequest, NextApiResponse } from 'next';
+import {
+  GetServerSideProps,
+  GetServerSidePropsContext,
+  // GetStaticPaths,
+  // GetStaticProps,
+  NextApiHandler,
+  NextApiRequest,
+  NextApiResponse,
+} from 'next';
+
+import { isBuild } from './isBuild';
 
 // This is the same as the `NextApiHandler` type, except instead of having a return type of `void | Promise<void>`, it's
 // only `Promise<void>`, because wrapped handlers are always async
@@ -201,4 +213,190 @@ async function finishSentryProcessing(res: AugmentedNextApiResponse): Promise<vo
   } catch (e) {
     __DEBUG_BUILD__ && logger.log('Error while flushing events:\n', e);
   }
+}
+
+type GlobalWithTransactionStash = typeof global & { __sentryTransactions__: Record<string, Transaction> };
+
+function getTransactionById(transactionId: string = ''): Transaction | undefined {
+  const stash = (getGlobalObject() as GlobalWithTransactionStash).__sentryTransactions__;
+  return stash && stash[transactionId];
+}
+
+function deleteTransaction(transactionId: string): void {
+  const stash = (getGlobalObject() as GlobalWithTransactionStash).__sentryTransactions__ || {};
+  // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+  delete stash[transactionId];
+}
+
+function stashTransaction(transaction: Transaction): void {
+  const global = getGlobalObject() as GlobalWithTransactionStash;
+  global.__sentryTransactions__ = global.__sentryTransactions__ || {};
+  global.__sentryTransactions__[transaction.spanId] = transaction;
+}
+
+type UnderscoreAppContextData = {
+  [key: string]: unknown;
+  pageProps: {
+    [propName: string]: unknown;
+    __sentry_transaction_id__?: string;
+  };
+  router: { route: string };
+};
+
+type UnderscoreAppComponent = (contextData: UnderscoreAppContextData) => unknown;
+type WrappedUnderscoreAppComponent = UnderscoreAppComponent;
+
+/**
+ *
+ */
+export function withSentry_app(origUnderscoreAppComponent: UnderscoreAppComponent): WrappedUnderscoreAppComponent {
+  return function wrappedUnderscoreApp(contextData: UnderscoreAppContextData) {
+    console.log("I'm in the wrappedUnderscoreApp function returned by appWithSentry");
+
+    if (hasTracingEnabled() && !isBuild()) {
+      let activeTransaction = getTransactionById(contextData.pageProps.__sentry_transaction_id__);
+
+      if (!activeTransaction) {
+        activeTransaction = getCurrentHub().startTransaction({
+          name: contextData.router.route,
+          metadata: { source: 'route' },
+        });
+        stashTransaction(activeTransaction);
+      }
+
+      __DEBUG_BUILD__ &&
+        logger.log(
+          `Found an active transaction. Changing its name from ${activeTransaction.name} to ${contextData.router.route}`,
+        );
+      activeTransaction.setName(contextData.router.route, 'route');
+
+      const _appWrapperSpan = activeTransaction.startChild({
+        op: '_app wrapper',
+      });
+
+      const jsx = origUnderscoreAppComponent(contextData);
+
+      _appWrapperSpan.finish();
+      activeTransaction.finish();
+      deleteTransaction(activeTransaction.spanId);
+
+      return jsx;
+    }
+
+    debugger;
+
+    return origUnderscoreAppComponent(contextData);
+  };
+}
+
+// TODO add mechanism
+// TODO check if request is in list of routes
+
+// type GetServerSidePropsContextData = { resolvedUrl: string };
+type GetServerSidePropsFunction = GetServerSideProps;
+type WrappedGetServerSidePropsFunction = GetServerSidePropsFunction;
+
+// type GetStaticPathsFunction = GetStaticPaths;
+// type WrappedGetStaticPathsFunction = GetStaticPathsFunction;
+
+/**
+ *
+ */
+// export function withSentryNew(
+//   wrappee: GetServerSidePropsFunction | GetStaticPropsFunction | GetStaticPathsFunction | undefined,
+//   route: string,
+// ): WrappedGetServerSidePropsFunction | WrappedGetStaticPropsFunction | WrappedGetStaticPathsFunction | undefined {
+//   if (!wrappee) {
+//     return;
+//   }
+// }
+
+function startOrGetPageRouteTransaction(route: string, transactionId?: string): Transaction {
+  const transaction =
+    getTransactionById(transactionId) ||
+    getCurrentHub().startTransaction({
+      name: route,
+      op: 'http.server',
+      metadata: { source: 'route' },
+    });
+  // If the transaction is already there this is superfluous, but also harmless
+  stashTransaction(transaction);
+
+  return transaction;
+}
+
+/**
+ *
+ *
+ */
+export function withSentryGSSP(
+  gSSP: GetServerSidePropsFunction | undefined,
+  route: string,
+): WrappedGetServerSidePropsFunction | undefined {
+  console.log("I'm in the withSentry function");
+
+  // TODO explain
+  if (!gSSP) {
+    return;
+  }
+
+  return async function wrappedGSSP(context: GetServerSidePropsContext) {
+    console.log("I'm in the the `wrappedGSSP` function returned by withSentry");
+    debugger;
+
+    let finalProps;
+
+    // Not clear why nextjs is classifying a css map filename as parameter, but either way, we don't want the request to
+    // spawn a transaction
+    if (hasTracingEnabled() && !isBuild() && !context.resolvedUrl.endsWith('.map')) {
+      // In this case we know it will be starting, not getting
+      const transaction = startOrGetPageRouteTransaction(route);
+
+      const gSSPWrapperSpan = transaction.startChild({ op: 'getServerSideProps' });
+
+      finalProps = (await gSSP(context)) as { props: Record<string, unknown> };
+
+      gSSPWrapperSpan.finish();
+
+      finalProps.props.__sentry_transaction_id__ = transaction.spanId;
+    } else {
+      finalProps = await gSSP(context);
+    }
+
+    return finalProps;
+  };
+}
+
+type GetStaticPropsContextData = { [key: string]: any };
+type GetStaticPropsFunction = (context: GetStaticPropsContextData) => Promise<{ props: { [propName: string]: any } }>;
+type WrappedGetStaticPropsFunction = GetStaticPropsFunction;
+
+/**
+ *
+ */
+export function withSentryGSP(gSP: GetStaticPropsFunction): WrappedGetStaticPropsFunction {
+  console.log("I'm in the withSentry function");
+  return async function wrappedGSP(context: GetStaticPropsContextData) {
+    console.log("I'm in the the `wrappedGSP` function returned by withSentry");
+    debugger;
+    if (hasTracingEnabled() && !isBuild()) {
+      const transaction = getCurrentHub().startTransaction({
+        name: 'unknown transaction',
+        op: 'http.server',
+        // Purposefully not adding `source` metadata because the name will get overwritten
+      });
+      stashTransaction(transaction);
+
+      const gSPWrapperSpan = transaction.startChild({ op: 'getStaticProps' });
+
+      const finalProps = await gSP(context);
+      finalProps.props.__sentry_transaction_id__ = transaction.spanId;
+
+      gSPWrapperSpan.finish();
+
+      return finalProps;
+    }
+
+    return gSP(context);
+  };
 }
