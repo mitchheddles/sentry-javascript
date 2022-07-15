@@ -134,8 +134,8 @@ if (!isVercel && !isBuild()) {
   // In environments where the JS file doesn't exist, such as testing, import the TS file.
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { instrumentServer } = require('./utils/instrumentServer.js');
-    instrumentServer();
+    // const { instrumentServer } = require('./utils/instrumentServer.js');
+    // instrumentServer();
   } catch (err) {
     __DEBUG_BUILD__ && logger.warn(`Error: Unable to instrument server for tracing. Got ${err}.`);
   }
