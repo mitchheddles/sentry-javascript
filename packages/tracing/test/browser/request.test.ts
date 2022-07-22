@@ -134,11 +134,13 @@ describe('callbacks', () => {
 
       expect(newSpan).toBeDefined();
       expect(newSpan).toBeInstanceOf(Span);
-      expect(newSpan.data).toEqual({
-        method: 'GET',
-        type: 'fetch',
-        url: 'http://dogs.are.great/',
-      });
+      expect(newSpan.data).toEqual(
+        expect.objectContaining({
+          method: 'GET',
+          type: 'fetch',
+          url: 'http://dogs.are.great/',
+        }),
+      );
       expect(newSpan.description).toBe('GET http://dogs.are.great/');
       expect(newSpan.op).toBe('http.client');
       expect(fetchHandlerData.fetchData?.__span).toBeDefined();
@@ -241,11 +243,13 @@ describe('callbacks', () => {
       const newSpan = transaction.spanRecorder?.spans[1] as Span;
 
       expect(newSpan).toBeInstanceOf(Span);
-      expect(newSpan.data).toEqual({
-        method: 'GET',
-        type: 'xhr',
-        url: 'http://dogs.are.great/',
-      });
+      expect(newSpan.data).toEqual(
+        expect.objectContaining({
+          method: 'GET',
+          type: 'xhr',
+          url: 'http://dogs.are.great/',
+        }),
+      );
       expect(newSpan.description).toBe('GET http://dogs.are.great/');
       expect(newSpan.op).toBe('http.client');
       expect(xhrHandlerData.xhr.__sentry_xhr_span_id__).toBeDefined();

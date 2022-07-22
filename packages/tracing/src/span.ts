@@ -1,6 +1,6 @@
 /* eslint-disable max-lines */
 import { Primitive, Span as SpanInterface, SpanContext, Transaction } from '@sentry/types';
-import { dropUndefinedKeys, timestampWithMs, uuid4 } from '@sentry/utils';
+import { dropUndefinedKeys, logger, timestampWithMs, uuid4 } from '@sentry/utils';
 
 /**
  * Keeps track of finished spans for a given transaction
@@ -169,6 +169,18 @@ export class Span implements SpanInterface {
 
     childSpan.transaction = this.transaction;
 
+    if (__DEBUG_BUILD__ && childSpan.transaction) {
+      const opStr = (spanContext && spanContext.op) || '< unknown op >';
+      const nameStr = childSpan.transaction.name || '< unknown name >';
+      const idStr = childSpan.transaction.spanId;
+
+      // TODO: It would be safer to shove this in metadata (would need to move `metadata` from the `Transaction` class
+      // to the `Span` class)
+      childSpan.data.__log_message__ = `[Tracing] Starting ${opStr} span on transaction ${nameStr} (${idStr}).`;
+
+      logger.log(childSpan.data.__log_message__);
+    }
+
     return childSpan;
   }
 
@@ -220,6 +232,17 @@ export class Span implements SpanInterface {
    * @inheritDoc
    */
   public finish(endTimestamp?: number): void {
+    if (
+      __DEBUG_BUILD__ &&
+      this.transaction &&
+      // We only want to log this for spans, not for transactions
+      this.transaction.spanId !== this.spanId &&
+      this.data.__log_message__
+    ) {
+      logger.log((this.data.__log_message__ as string).replace('Starting', 'Finishing'));
+      delete this.data.__log_message__;
+    }
+
     this.endTimestamp = typeof endTimestamp === 'number' ? endTimestamp : timestampWithMs();
   }
 
